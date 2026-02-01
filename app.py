@@ -1,105 +1,61 @@
-import os
-import requests
 import streamlit as st
+import requests
+import os
 
+API_BASE = os.getenv("API_URL", "http://localhost:8000")
 
-# ---------- Config ----------
-st.set_page_config(page_title="Brooklyn Bridge Pedestrian Predictor", layout="centered")
-
-API_BASE = os.getenv("API_URL", "http://localhost:8000")  # local default
-
-
-# ---------- Helpers ----------
 @st.cache_data(show_spinner=False)
 def fetch_levels():
-    """Fetch factor levels from the R plumber API."""
-    url = f"{API_BASE}/levels"
-    resp = requests.get(url, timeout=10)
-    resp.raise_for_status()
-    return resp.json()
+    return requests.get(f"{API_BASE}/levels", timeout=10).json()
 
-
-def post_predict(payload: dict) -> float:
-    """Send payload to /predict and return a single numeric prediction."""
-    url = f"{API_BASE}/predict"
-    resp = requests.post(url, json=payload, timeout=15)
-    resp.raise_for_status()
-    data = resp.json()
-
-    # Your API returns: {"predicted_pedestrians": [1184.9133]} OR sometimes a single number.
-    pred = data.get("predicted_pedestrians", None)
-    if pred is None:
-        raise ValueError(f"API response missing 'predicted_pedestrians': {data}")
-
+def predict(payload):
+    r = requests.post(f"{API_BASE}/predict", json=payload, timeout=15)
+    r.raise_for_status()
+    pred = r.json()["predicted_pedestrians"]
     if isinstance(pred, list):
-        if len(pred) == 0:
-            raise ValueError(f"Empty prediction list returned: {data}")
         pred = pred[0]
-
     return float(pred)
 
-
-# ---------- UI ----------
 st.title("Brooklyn Bridge Pedestrian Predictor")
-st.caption("Uses your R linear regression model via a local plumber API.")
+st.caption("Uses an R linear regression model via a local plumber API.")
+st.caption("The linear regression model used for this project explains 85.3 percent of the variation between selected variables and amount of pedestrians.")
+st.caption("Note: The data used for this project is from NYC Open Data and is open source.")
 
-# Try to load levels; if API isn't running, show a helpful error
-try:
-    levels = fetch_levels()
-except Exception as e:
-    st.error(
-        "Couldn't reach the R API. Make sure plumber is running at "
-        f"{API_BASE} and that you have a GET /levels endpoint.\n\n"
-        f"Error: {e}"
-    )
-    st.stop()
 
-# Expected keys from /levels:
-# weather_summary, weekday, month, hour
-weather_levels = levels.get("weather_summary", [])
-weekday_levels = levels.get("weekday", [])
-month_levels = levels.get("month", [])
-hour_levels = levels.get("hour", [])
+levels = fetch_levels()
 
-# Sidebar inputs
-st.sidebar.header("Inputs")
+# MAIN PAGE INPUTS
+with st.form("predict_form"):
+    c1, c2, c3 = st.columns(3)
 
-weather_summary = st.sidebar.selectbox("Weather summary", weather_levels)
-weekday = st.sidebar.selectbox("Weekday", weekday_levels)
-month = st.sidebar.selectbox("Month", month_levels)
+    with c1:
+        weather = st.selectbox("Weather summary", levels["weather_summary"])
+        weekday = st.selectbox("Weekday", levels["weekday"])
 
-# hours may come back as strings like "0", "1", ..., "23"
-hour_choice = st.sidebar.selectbox("Hour", hour_levels)
+    with c2:
+        month = st.selectbox("Month", levels["month"])
+        hour = st.selectbox("Hour", levels["hour"])
 
-temperature = st.sidebar.number_input("Temperature", value=50.0)
-precipitation = st.sidebar.number_input("Precipitation", min_value=0.0, value=0.0)
-has_event = st.sidebar.selectbox("Has event?", [0, 1])
+    with c3:
+        temperature = st.number_input("Temperature", value=50.0)
+        precipitation = st.number_input("Precipitation", min_value=0.0, value=0.0)
+        has_event = st.selectbox("Has event?", [0, 1])
 
-# Predict button
-if st.button("Predict pedestrians"):
+    submitted = st.form_submit_button("Predict")
+
+if submitted:
     payload = {
-        "weather_summary": weather_summary,
+        "weather_summary": weather,
         "temperature": temperature,
         "precipitation": precipitation,
         "has_event": has_event,
-        "hour": int(hour_choice),  # convert "12" -> 12
+        "hour": int(hour),
         "weekday": weekday,
-        "month": month
+        "month": month,
     }
 
     with st.spinner("Predicting..."):
-        try:
-            pred = post_predict(payload)
-            st.success("Prediction complete")
+        pred = predict(payload)
 
-            # Display
-            st.metric("Predicted pedestrians", f"{pred:,.0f}")
-            st.write("Raw prediction:", pred)
-
-            # Optional: show the payload for debugging
-            with st.expander("Payload sent to API"):
-                st.json(payload)
-
-        except Exception as e:
-            st.error(f"Prediction failed: {e}")
-            st.write("If you see NA issues, it usually means a factor-level mismatch.")
+    st.metric("Predicted pedestrians", f"{pred:,.0f}")
+    st.write("Raw prediction:", pred)
